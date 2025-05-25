@@ -1,75 +1,540 @@
 <!DOCTYPE html>
 <html lang="ko">
+
 <head>
-<meta charset="UTF-8" />
-<title>간단한 오목판</title>
-<style>
-  body { text-align: center; font-family: Arial, sans-serif; }
-  canvas { border: 1px solid #333; margin-top: 20px; }
-</style>
+    <meta charset="UTF-8" />
+    <title>오목</title>
+    <style>
+        body {
+            background: #c8c8c8;
+            font-family: sans-serif;
+        }
+
+        .container {
+            text-align: center;
+            margin-top: 20px;
+        }
+
+        canvas {
+            background: #c89632;
+            border: 1px solid #000;
+            display: block;
+            margin: 20px auto;
+        }
+
+        .controls {
+            display: inline-flex;
+            align-items: center;
+            gap: 15px;
+            justify-content: center;
+            font-size: 20px;
+        }
+
+        button {
+            font-size: 16px;
+            padding: 5px 10px;
+            cursor: pointer;
+        }
+    </style>
 </head>
+
 <body>
-  <h1>간단한 오목판 (GitHub Pages용)</h1>
-  <canvas id="omokCanvas"></canvas>
 
-  <script>
-    const canvas = document.getElementById('omokCanvas');
-    const ctx = canvas.getContext('2d');
-    const size = 15;
-    const cellSize = 30;
+    <div class="container">
+        <h1>오목</h1>
+        <canvas id="board" width="600" height="600"></canvas>
+        <div class="controls">
+            <button id="resetBtn">초기화</button>
+            <button id="undoBtn">되돌리기</button>
+            <div id="status">흑 차례입니다.</div>
+        </div>
+    </div>
 
-    canvas.width = size * cellSize;
-    canvas.height = size * cellSize;
+    <script>
+        const canvas = document.getElementById('board');
+        const ctx = canvas.getContext('2d');
+        const BOARD_NUM = 15;
+        const CELL_SIZE = 40;
+        const HALF_CELL = CELL_SIZE / 2;
+        const BOARD_SIZE = BOARD_NUM * CELL_SIZE;
+        const COLORS = ['black', 'white'];
+        const NAMES = ['흑', '백'];
 
-    const board = Array(size).fill(null).map(() => Array(size).fill(0));
-    let currentPlayer = 0;
+        let mousePos = null;
+        let game = null;
 
-    function drawBoard() {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.strokeStyle = '#333';
-      ctx.lineWidth = 1;
+        const REVMASK1 = BigInt('0b' + '01'.repeat(128));
+        const REVMASK2 = BigInt('0b' + '0011'.repeat(64));
+        const REVMASK4 = BigInt('0b' + '00001111'.repeat(32));
+        const REVMASK8 = BigInt('0b' + ('0'.repeat(8) + '1'.repeat(8)).repeat(16));
+        const REVMASK16 = BigInt('0b' + ('0'.repeat(16) + '1'.repeat(16)).repeat(8));
+        const REVMASK32 = BigInt('0b' + ('0'.repeat(32) + '1'.repeat(32)).repeat(4));
+        const REVMASK64 = BigInt('0b' + ('0'.repeat(64) + '1'.repeat(64)).repeat(2));
+        const REVMASK128 = BigInt('0b' + '0'.repeat(128) + '1'.repeat(128));
 
-      for (let i = 0; i <= size; i++) {
-        // 가로선
-        ctx.beginPath();
-        ctx.moveTo(0, i * cellSize + 0.5);
-        ctx.lineTo(size * cellSize, i * cellSize + 0.5);
-        ctx.stroke();
+        const LINECLIPMASK = ~(
+            (1n << BigInt(7 * 15 + 8)) +
+            (1n << BigInt(8 * 15 + 7)) +
+            (1n << BigInt(8 * 15 + 8)) +
+            (1n << BigInt(8 * 15 + 6))
+        );
 
-        // 세로선
-        ctx.beginPath();
-        ctx.moveTo(i * cellSize + 0.5, 0);
-        ctx.lineTo(i * cellSize + 0.5, size * cellSize);
-        ctx.stroke();
-      }
-    }
+        //const CIRCLEMASK = (0b111n << 6n) * ((1n << (6 * 15n)) + (1n << (7 * 15n)) + (1n << (8 * 15n))) << 112n;
+        const CIRCLEMASK = 0x1c00380070000000000000000000000000000000000000000000000000000n
+        
 
-    function drawStone(x, y, player) {
-      const centerX = x * cellSize;
-      const centerY = y * cellSize;
-      const radius = cellSize / 2 - 3;
+        // 225비트 역전 함수 (BigInt)
+        function reverseBit225(x) {
+            x = ((x & REVMASK1) << 1n) | ((x >> 1n) & REVMASK1);
+            x = ((x & REVMASK2) << 2n) | ((x >> 2n) & REVMASK2);
+            x = ((x & REVMASK4) << 4n) | ((x >> 4n) & REVMASK4);
+            x = ((x & REVMASK8) << 8n) | ((x >> 8n) & REVMASK8);
+            x = ((x & REVMASK16) << 16n) | ((x >> 16n) & REVMASK16);
+            x = ((x & REVMASK32) << 32n) | ((x >> 32n) & REVMASK32);
+            x = ((x & REVMASK64) << 64n) | ((x >> 64n) & REVMASK64);
+            x = ((x & REVMASK128) << 128n) | ((x >> 128n) & REVMASK128);
+            return x >> (256n - 225n);
+        }
 
-      ctx.beginPath();
-      ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
-      ctx.fillStyle = player === 0 ? 'black' : 'white';
-      ctx.fill();
-      ctx.strokeStyle = '#555';
-      ctx.stroke();
-    }
+        let checkLineBits = [];
+        const checkDir = [[[0, 1], 7 * 15 + 0], [[1, 1], 0 * 15 + 0], [[1, 0], 0 * 15 + 7], [[1, -1], 1 * 15 - 1]];
 
-    canvas.addEventListener('click', (e) => {
-      const rect = canvas.getBoundingClientRect();
-      const x = Math.floor((e.clientX - rect.left) / cellSize);
-      const y = Math.floor((e.clientY - rect.top) / cellSize);
+        let verticals = [];
+        let horizontals = [];
 
-      if (board[y][x] === 0) {
-        board[y][x] = currentPlayer;
-        drawStone(x, y, currentPlayer);
-        currentPlayer = 1 - currentPlayer; // 턴 변경
-      }
-    });
+        function fillCheckLineBits() {
+            checkLineBits = [];
 
-    drawBoard();
-  </script>
+            for (const [dirVec, startOrig] of checkDir) {
+                const dir = dirVec[0] * 15 + dirVec[1];
+                let start = startOrig + 3 * dir;
+                let mask = 0n;
+                let point = start;
+                for (let step = 0; step < 9; step++) {
+                    mask += 1n << BigInt(point);
+                    point += dir;
+                }
+                mask ^= 1n << 112n;
+
+                const bitDict = new Map();
+                const halfBit = new Map();
+
+                for (let i = 0; i < (1 << 4); i++) {
+                    let halfkeybit = 0n;
+                    point = start;
+                    for (let step = 0; step < 4; step++) {
+                        if ((i & (1 << step)) !== 0) {
+                            halfkeybit += 1n << BigInt(point);
+                        }
+                        point += dir;
+                    }
+                    const notI = (~i) & 0b1111;
+                    let bitLength = 0;
+                    let tmp = notI;
+                    while (tmp > 0) {
+                        tmp >>= 1;
+                        bitLength++;
+                    }
+                    halfBit.set(halfkeybit, 4 - bitLength);
+                }
+
+                for (const [hk1, v1] of halfBit.entries()) {
+                    for (const [hk2, v2] of halfBit.entries()) {
+                        const revHk2 = reverseBit225(hk2);
+                        const key = hk1 + revHk2;
+                        bitDict.set(key, v1 + v2 + 1);
+                    }
+                }
+
+                checkLineBits.push([mask, bitDict]);
+            }
+        }
+
+        function fillVerticalAndHorizontal() {
+            verticals = [];
+            horizontals = [];
+            let rev_verticals = [];
+            let rev_horizontals = [];
+
+            // verticals
+            const vk = BigInt(parseInt('1'.repeat(15), 2)); // 15개 1 비트
+            const all15 = (1n << 15n) - 1n;
+
+            for (let i = 0; i < 15; i++) {
+                const nbit1 = (1n << BigInt(i)) - 1n;
+                const nbit2 = (1n << BigInt(15 - i)) - 1n;
+                const v = nbit1 * vk;
+                const rv = (all15 ^ nbit2) * vk;
+                verticals.push(~v);
+                rev_verticals.push(~rv);
+            }
+
+            // horizontals
+            horizontals.push(~0n);
+            rev_horizontals.push(~0n);
+
+            for (let i = 0; i < 14; i++) {
+                const h = ((~horizontals[i]) << 15n) + all15;
+                const rh = ((~rev_horizontals[i]) >> 15n) + (all15 << 210n);
+                horizontals.push(~h);
+                rev_horizontals.push(~rh);
+            }
+
+            verticals = verticals.slice(0, 7).reverse().concat(rev_verticals.slice(0, 8));
+            horizontals = horizontals.slice(0, 7).reverse().concat(rev_horizontals.slice(0, 8));
+        }
+        
+        fillCheckLineBits();
+        fillVerticalAndHorizontal();
+
+        class Omok {
+            static black = 0;
+            static white = 1;
+            static none = -1;
+
+            constructor(board_size) {
+                if (board_size !== 15) throw new Error('board_size must be 15');
+                this.board_size = board_size;
+                this.turn = Omok.black;
+                this.board = Array.from({ length: board_size }, () => Array(board_size).fill(Omok.none));
+                this.center = (board_size - 1) >> 1;
+                this.winner = Omok.none;
+                this.finished = false;
+                this.omokBit = [0n, 0n];
+                this.omokDataStack = [];
+            }
+
+            _calc_block(pos, color = 0) {
+                let result = (BigInt(this.omokBit[this.turn ^ color]) << 112n) >> BigInt(15 * pos[0] + pos[1]);
+                result &= verticals[pos[1]] & horizontals[pos[0]];
+                return result;
+            }
+
+            can_place(pos) {
+                if (((this.omokBit[0] | this.omokBit[1]) & (1n << BigInt(pos[0] * 15 + pos[1]))) !== 0n) return false;
+                if (this.finished) return false;
+
+                if (this.turn === Omok.black) {
+                    let num_3 = 0, num_4 = 0, num_6 = 0;
+                    const blockMine = this._calc_block(pos);
+                    const blockYours = this._calc_block(pos, 1);
+
+                    for (let i = 0; i < 4; i++) {
+                        const [mask, bitDict] = checkLineBits[i];
+                        const masked_block = blockMine & mask;
+                        const masked_all = (blockMine | blockYours) & mask;
+                        const n = bitDict.get(masked_block);
+                        const na = bitDict.get(masked_all);
+                        num_3 += (n === 3 && na === 3) ? 1 : 0;
+                        num_4 += (n === 4 && na === 4) ? 1 : 0;
+                        num_6 += (n >= 6) ? 1 : 0;
+                    }
+
+                    if (num_3 >= 2 || num_4 >= 2 || num_6) return false;
+                }
+
+                return true;
+            }
+
+            place(pos) {
+                this.omokDataStack.push(pos);
+
+                this.omokBit[this.turn] += 1n << BigInt(this.board_size * pos[0] + pos[1]);
+                this.board[pos[0]][pos[1]] = this.turn;
+
+                const block = this._calc_block(pos);
+
+                for (let i = 0; i < 4; i++) {
+                    const [mask, bitDict] = checkLineBits[i];
+                    const masked_block = block & mask;
+                    if (bitDict.get(masked_block) >= 5) {
+                        this.finished = true;
+                        this.winner = this.turn;
+                        break;
+                    }
+                }
+
+                this.turn ^= 1;
+            }
+
+            pop() {
+                const pos = this.omokDataStack.pop();
+                const bit = ~(1n << BigInt(pos[0] * 15 + pos[1]));
+                this.omokBit[Omok.black] &= bit;
+                this.omokBit[Omok.white] &= bit;
+                this.board[pos[0]][pos[1]] = Omok.none;
+                this.turn ^= 1;
+                this.finished = false;
+            }
+
+            get(pos) {
+                return this.board[pos[0]][pos[1]];
+            }
+        }
+
+        function value_of_color(bit, other_bit) {
+            let blockSelf = bit << 113n;
+            let blockAll = (bit | other_bit) << 113n;
+            const all = bit | other_bit;
+            let value = 0;
+
+            for (let pos = 0; pos < 225; pos++) {
+                blockSelf >>= 1n;
+                blockAll >>= 1n;
+
+                if ((all & (1n << BigInt(pos))) === 0n) {
+                    let score = 0;
+                    for (let i = 0; i < 4; i++) {
+                        const [mask, bitDict] = checkLineBits[i];
+                        const bSelfMask = blockSelf & mask;
+                        const bAllMask = blockAll & mask;
+                        const r = bitDict.get(bSelfMask);
+                        const rAll = bitDict.get(bAllMask);
+                        if (r === 5) {
+                            score += 10000;
+                        } else if (r === 4) {
+                            if (rAll === 4) {
+                                score += 1000;
+                            } else {
+                                score += 500;
+                            }
+                        } else if (r === 3) {
+                            if (rAll === 3) {
+                                score += 50;
+                            } else {
+                                score += 10;
+                            }
+                        }
+                    }
+                    if (score > value) value = score;
+                }
+            }
+
+            return value;
+        }
+
+        function randomInt(min, max) {
+            return Math.floor(Math.random() * (max - min + 1)) + min;
+        }
+
+        function game_value(game, color) {
+            const self = game.omokBit[color];
+            const other = game.omokBit[color ^ 1];
+            const selfvalue = value_of_color(self, other);
+            const othervalue = value_of_color(other, self);
+            return selfvalue - othervalue * 9;
+        }
+
+        function very_simple_omok_ai(game, return_value = false) {
+            let max_value = -Infinity;
+            let max_pos = [0, 0];
+            const all = game.omokBit[0] | game.omokBit[1];
+            if (all === 0n) {
+                return max_pos;
+            }
+
+            for (let x = 0; x <= 14; x++) {
+                for (let y = 0; y <= 14; y++) {
+                    const shift = BigInt(224 - x * 15 - y);
+                    if ((all & (CIRCLEMASK >> shift)) === 0n) {
+                        continue;
+                    }
+                    if (!game.can_place([x, y])) {
+                        continue;
+                    }
+                    game.place([x, y]);
+                    const randomvalue = randomInt(1, 300);
+                    const value = game_value(game, 1 - game.turn) + randomvalue;
+                    game.pop();
+                    if (max_value >= value) {
+                        continue;
+                    }
+                    max_value = value;
+                    max_pos = [x, y];
+                }
+            }
+
+            return return_value ? max_value : max_pos;
+        }
+
+        function little_simple_omok_ai(game, return_value = false, magic_number = 5) {
+            let max_value = -Infinity;
+            let max_pos = [0, 0];
+            const queue = [];
+            const all = game.omokBit[0] | game.omokBit[1];
+            if (all === 0n) {
+                return max_pos;
+            }
+
+            for (let x = 0; x <= 14; x++) {
+                for (let y = 0; y <= 14; y++) {
+                    const shift = BigInt(224 - x * 15 - y);
+                    if ((all & (CIRCLEMASK >> shift)) === 0n) {
+                        continue;
+                    }
+                    if (!game.can_place([x, y])) {
+                        continue;
+                    }
+                    game.place([x, y]);
+                    const randomvalue = randomInt(1, 100);
+                    const value = game_value(game, 1 - game.turn) + randomvalue;
+                    game.pop();
+
+                    if (value === Infinity) {
+                        return return_value ? value : [x, y];
+                    }
+                    queue.push([[x, y], value]);
+                    if (queue.length > magic_number) {
+                        queue.sort((a, b) => b[1] - a[1]);
+                        queue.pop();
+                    }
+                }
+            }
+
+            queue.sort((a, b) => b[1] - a[1]);
+
+            for (const [pos, value] of queue) {
+                game.place(pos);
+                const new_value = -very_simple_omok_ai(game, true);
+                game.pop();
+
+                if (new_value < max_value) {
+                    continue;
+                }
+                max_value = new_value;
+                max_pos = pos;
+            }
+
+            return return_value ? max_value : max_pos;
+        }
+
+        function initBoard() {
+            game = new Omok(15)
+            updateStatus();
+        }
+
+        function updateStatus(text) {
+            const status = document.getElementById('status');
+            if (text) status.textContent = text;
+            else status.textContent = `${NAMES[turn]} 차례입니다.`;
+        }
+
+        function drawBoard() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = '#c89632';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.strokeStyle = 'black';
+            ctx.lineWidth = 2;
+            for (let i = 0; i < BOARD_NUM; i++) {
+                const pos = HALF_CELL + i * CELL_SIZE;
+                ctx.beginPath();
+                ctx.moveTo(HALF_CELL, pos);
+                ctx.lineTo(BOARD_SIZE - HALF_CELL, pos);
+                ctx.stroke();
+
+                ctx.beginPath();
+                ctx.moveTo(pos, HALF_CELL);
+                ctx.lineTo(pos, BOARD_SIZE - HALF_CELL);
+                ctx.stroke();
+            }
+        }
+        
+        function drawStones() {
+            for (let i = 0; i < BOARD_NUM; i++) {
+                for (let j = 0; j < BOARD_NUM; j++) {
+                    if (game.board[i][j] !== Omok.none) {
+                        ctx.beginPath();
+                        ctx.fillStyle = COLORS[game.board[i][j]];
+                        const x = HALF_CELL + i * CELL_SIZE;
+                        const y = HALF_CELL + j * CELL_SIZE;
+                        ctx.ellipse(x, y, CELL_SIZE * 0.4, CELL_SIZE * 0.4, 0, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                }
+            }
+        }
+
+        function drawMouseStone() {
+            if (game.finished) return; // 게임 끝나면 표시 안함
+            if (!mousePos) return;
+
+            const i = Math.floor((mousePos.x - HALF_CELL + CELL_SIZE / 2) / CELL_SIZE);
+            const j = Math.floor((mousePos.y - HALF_CELL + CELL_SIZE / 2) / CELL_SIZE);
+            if (i < 0 || i >= BOARD_NUM || j < 0 || j >= BOARD_NUM) return;
+            if (game.board[i][j] !== Omok.none) return; // 이미 돌 있으면 안 그림
+
+            const x = HALF_CELL + i * CELL_SIZE;
+            const y = HALF_CELL + j * CELL_SIZE;
+
+            ctx.beginPath();
+            ctx.fillStyle = game.turn === 0 ? 'rgba(0,0,0,0.5)' : 'rgba(255,255,255,0.5)'; // 반투명 검정/흰색
+            ctx.ellipse(x, y, CELL_SIZE * 0.4, CELL_SIZE * 0.4, 0, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        
+        canvas.addEventListener('mousemove', e => {
+            const rect = canvas.getBoundingClientRect();
+            mousePos = {
+                x: e.clientX - rect.left,
+                y: e.clientY - rect.top
+            };
+            redraw();
+        });
+
+        canvas.addEventListener('mouseleave', e => {
+            mousePos = null;
+            redraw();
+        });
+
+        canvas.addEventListener('click', e => {
+            if (game.finished) return;
+            
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+
+            const i = Math.floor((x - HALF_CELL + CELL_SIZE / 2) / CELL_SIZE);
+            const j = Math.floor((y - HALF_CELL + CELL_SIZE / 2) / CELL_SIZE);
+
+            if (i < 0 || i >= BOARD_NUM || j < 0 || j >= BOARD_NUM) return;
+
+            if(game.can_place([i,j])){
+                game.place([i,j]);
+
+                if(game.finished){
+                    updateStatus(`${NAMES[game.winner]} 승리! 🎉`);
+                }
+                else{
+                    game.place(very_simple_omok_ai(game));
+                    if(game.finished){
+                        updateStatus(`${NAMES[game.winner]} 승리! 🎉`);
+                    }
+                }
+            }
+        });
+
+        document.getElementById('resetBtn').addEventListener('click', () => {
+            initBoard();
+            redraw();
+        });
+
+        document.getElementById('undoBtn').addEventListener('click',() => {
+            if(game.omokDataStack.length > 0){
+                game.pop();
+            }
+        });
+
+        function redraw() {
+            drawBoard();
+            drawStones();
+            drawMouseStone();
+        }
+        initBoard();
+        redraw();
+
+    </script>
+
 </body>
+
 </html>
