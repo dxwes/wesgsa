@@ -416,7 +416,7 @@
         function updateStatus(text) {
             const status = document.getElementById('status');
             if (text) status.textContent = text;
-            else status.textContent = `${NAMES[turn]} 차례입니다.`;
+            else status.textContent = `${NAMES[game.turn]} 차례입니다.`;
         }
 
         function drawBoard() {
