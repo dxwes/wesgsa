@@ -359,7 +359,7 @@
                         game.pop()
                         return return_value?Infinity:[x,y]; 
                     }
-                    const randomvalue = 0;//randomInt(1, 300);
+                    const randomvalue = randomInt(1, 300);
                     const value = game_value(game, 1 - game.turn) + randomvalue;
                     game.pop();
                     if (max_value >= value) {
@@ -397,7 +397,7 @@
                         return return_value?Infinity:[x,y]; 
                     }
 
-                    const randomvalue = randomInt(1, 100);
+                    const randomvalue = randomInt(1, 300);
                     const value = game_value(game, 1 - game.turn) + randomvalue;
                     game.pop();
 
