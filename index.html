@@ -81,7 +81,7 @@
 
         //const CIRCLEMASK = (0b111n << 6n) * ((1n << (6 * 15n)) + (1n << (7 * 15n)) + (1n << (8 * 15n))) << 112n;
         const CIRCLEMASK = 0x1c00380070000000000000000000000000000000000000000000000000000n
-        
+
 
         // 225비트 역전 함수 (BigInt)
         function reverseBit225(x) {
@@ -183,7 +183,7 @@
             verticals = verticals.slice(0, 7).reverse().concat(rev_verticals.slice(0, 8));
             horizontals = horizontals.slice(0, 7).reverse().concat(rev_horizontals.slice(0, 8));
         }
-        
+
         fillCheckLineBits();
         fillVerticalAndHorizontal();
 
@@ -282,34 +282,45 @@
                 blockSelf >>= 1n;
                 blockAll >>= 1n;
 
-                if ((all & (1n << BigInt(pos))) === 0n) {
-                    let score = 0;
-                    for (let i = 0; i < 4; i++) {
-                        const [mask, bitDict] = checkLineBits[i];
-                        const bSelfMask = blockSelf & mask;
-                        const bAllMask = blockAll & mask;
-                        const r = bitDict.get(bSelfMask);
-                        const rAll = bitDict.get(bAllMask);
-                        if (r === 5) {
-                            score += 10000;
-                        } else if (r === 4) {
-                            if (rAll === 4) {
-                                score += 1000;
-                            } else {
-                                score += 500;
-                            }
-                        } else if (r === 3) {
-                            if (rAll === 3) {
-                                score += 50;
-                            } else {
-                                score += 10;
-                            }
-                        }
+                let x = Math.floor(pos/15);
+                let y = pos % 15;
+
+                if ((all & (CIRCLEMASK >> BigInt(224 - pos))) === 0n) {
+                    continue;
+                }
+
+                const clipmask = horizontals[x] & verticals[y];
+                const blockSelfCliped = blockSelf & clipmask;
+                const blockAllCliped = blockAll & clipmask;
+                let k = 0;
+
+                if(((blockAllCliped & (~blockSelfCliped)) & (1n << 112n)) !== 0n){
+                    continue;
+                }
+                if ((blockAllCliped & (1n << 112n)) === 0n) {
+                    k = 1;
+                }
+
+                for (let i = 0; i < 4; i++) {
+                    const [mask, bitDict] = checkLineBits[i];
+                    const bSelfMask = blockSelfCliped & mask;
+                    const bAllMask = blockAllCliped & mask;
+                    const lineclipedself = bSelfMask & mask;
+                    const lineclipedall = bAllMask & LINECLIPMASK;
+                    const n1 = bitDict.get(bSelfMask);
+                    const n2 = bitDict.get(bAllMask);
+                    const n3 = bitDict[lineclipedself];
+                    const n4 = bitDict[lineclipedall];
+                    if (n1 * (1 - k) >= 5) {
+                        return Math.Infinity;
                     }
-                    if (score > value) value = score;
+                    else {
+                        const FIRST = n1;
+                        const SECOND = 2 - (Number(n1 == n2) + Number(n2 - n1 === n4 - n3));
+                        value += Math.pow(3, FIRST * 3 - SECOND - k * 3 - Math.max(FIRST + SECOND, 5) + 4);
+                    }
                 }
             }
-
             return value;
         }
 
@@ -343,7 +354,11 @@
                         continue;
                     }
                     game.place([x, y]);
-                    const randomvalue = randomInt(1, 300);
+                    if(game.finished){
+                        game.pop()
+                        return return_value?Infinity:[x,y]; 
+                    }
+                    const randomvalue = 0;//randomInt(1, 300);
                     const value = game_value(game, 1 - game.turn) + randomvalue;
                     game.pop();
                     if (max_value >= value) {
@@ -376,13 +391,15 @@
                         continue;
                     }
                     game.place([x, y]);
+                    if(game.finished){
+                        game.pop()
+                        return return_value?Infinity:[x,y]; 
+                    }
+
                     const randomvalue = randomInt(1, 100);
                     const value = game_value(game, 1 - game.turn) + randomvalue;
                     game.pop();
 
-                    if (value === Infinity) {
-                        return return_value ? value : [x, y];
-                    }
                     queue.push([[x, y], value]);
                     if (queue.length > magic_number) {
                         queue.sort((a, b) => b[1] - a[1]);
@@ -392,6 +409,7 @@
             }
 
             queue.sort((a, b) => b[1] - a[1]);
+            console.log(queue);
 
             for (const [pos, value] of queue) {
                 game.place(pos);
@@ -439,7 +457,7 @@
                 ctx.stroke();
             }
         }
-        
+
         function drawStones() {
             for (let i = 0; i < BOARD_NUM; i++) {
                 for (let j = 0; j < BOARD_NUM; j++) {
@@ -472,7 +490,7 @@
             ctx.ellipse(x, y, CELL_SIZE * 0.4, CELL_SIZE * 0.4, 0, 0, Math.PI * 2);
             ctx.fill();
         }
-        
+
         canvas.addEventListener('mousemove', e => {
             const rect = canvas.getBoundingClientRect();
             mousePos = {
@@ -489,7 +507,7 @@
 
         canvas.addEventListener('click', e => {
             if (game.finished) return;
-            
+
             const rect = canvas.getBoundingClientRect();
             const x = e.clientX - rect.left;
             const y = e.clientY - rect.top;
@@ -499,15 +517,15 @@
 
             if (i < 0 || i >= BOARD_NUM || j < 0 || j >= BOARD_NUM) return;
 
-            if(game.can_place([i,j])){
-                game.place([i,j]);
+            if (game.can_place([i, j])) {
+                game.place([i, j]);
 
-                if(game.finished){
+                if (game.finished) {
                     updateStatus(`${NAMES[game.winner]} 승리! 🎉`);
                 }
-                else{
+                else {
                     game.place(very_simple_omok_ai(game));
-                    if(game.finished){
+                    if (game.finished) {
                         updateStatus(`${NAMES[game.winner]} 승리! 🎉`);
                     }
                 }
@@ -515,13 +533,16 @@
         });
 
         document.getElementById('resetBtn').addEventListener('click', () => {
+
             initBoard();
             redraw();
         });
 
-        document.getElementById('undoBtn').addEventListener('click',() => {
-            if(game.omokDataStack.length > 0){
+        document.getElementById('undoBtn').addEventListener('click', () => {
+            if (game.omokDataStack.length > 0) {
                 game.pop();
+                updateStatus()
+                redraw()
             }
         });
 
