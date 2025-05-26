@@ -41,7 +41,7 @@
 <body>
 
     <div class="container">
-        <h1>오목</h1>
+        <h1>오목 v1.0.3</h1>
         <canvas id="board" width="600" height="600"></canvas>
         <div class="controls">
             <button id="resetBtn">초기화</button>
@@ -472,6 +472,17 @@
                     }
                 }
             }
+            if(game.omokDataStack.length > 0){
+                let idx = game.omokDataStack.length-1;
+                let i = game.omokDataStack[idx][0];
+                let j = game.omokDataStack[idx][1];
+                ctx.beginPath();
+                ctx.fillStyle = "green";
+                const x = HALF_CELL + i * CELL_SIZE;
+                const y = HALF_CELL + j * CELL_SIZE;
+                ctx.ellipse(x, y, CELL_SIZE * 0.1, CELL_SIZE * 0.1, 0, 0, Math.PI * 2);
+                ctx.fill();
+            }
         }
 
         function drawMouseStone() {
@@ -525,7 +536,7 @@
                     updateStatus(`${NAMES[game.winner]} 승리! 🎉`);
                 }
                 else {
-                    game.place(very_simple_omok_ai(game));
+                    game.place(little_simple_omok_ai(game));
                     if (game.finished) {
                         updateStatus(`${NAMES[game.winner]} 승리! 🎉`);
                     }
